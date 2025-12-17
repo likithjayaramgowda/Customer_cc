@@ -19,6 +19,8 @@ def send_mail(
     smtp_user = os.environ.get("SMTP_USER")
     smtp_password = os.environ.get("SMTP_PASSWORD")
     mail_from = os.environ.get("MAIL_FROM", smtp_user)
+    from_addr = os.environ.get("SMTP_FROM") 
+
 
     # SMTP2GO supports multiple connection modes. Make this configurable
     # so the workflow doesn't report success while the server drops the mail.
@@ -29,7 +31,7 @@ def send_mail(
         raise RuntimeError("SMTP_USER or SMTP_PASSWORD not set.")
 
     msg = EmailMessage()
-    msg["From"] = mail_from
+    msg["From"] = from_addr
     msg["To"] = ", ".join(to)
     msg["Subject"] = subject
     msg.set_content(body)
