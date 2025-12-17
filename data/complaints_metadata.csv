@@ -1,0 +1,3 @@
+complaint_id,submission_timestamp,created_at_utc,customer_email,country,product_name,lot_serial_no,complaint_type,pdf_filename,dropbox_folder,dropbox_shared_link,github_run_url
+RN-20251216-1433,2025-12-16T13:33:01.111Z,2025-12-16T13:33:15.661371+00:00,,,,,,,,,https://github.com/raz-redentnova/customer_complaint_form/actions/runs/20269721170
+RN-20251216-1603,2025-12-16T15:03:11.853Z,2025-12-16T15:03:50.942106+00:00,,,,,,,,,https://github.com/raz-redentnova/customer_complaint_form/actions/runs/20272491421
