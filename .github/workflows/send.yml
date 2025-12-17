@@ -59,13 +59,23 @@ jobs:
           set -euxo pipefail
           pwd
           ls -la
+        
+          echo "=== running app.main ==="
           python -m app.main
+        
+          echo "=== after app.main ==="
           echo "=== out folder ==="
+          find . -maxdepth 2 -type d -print
           ls -la out || true
+          find out -maxdepth 1 -type f -print || true
+        
           echo "=== data folder ==="
           ls -la data || true
+        
+          # fail if no pdf was generated
           test -n "$(ls -1 out/*.pdf 2>/dev/null | head -n 1)"
-      
+        
+              
 
       - name: Upload generated PDF (artifact)
         uses: actions/upload-artifact@v4
