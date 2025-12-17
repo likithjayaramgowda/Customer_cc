@@ -46,28 +46,34 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-
-          MAIL_SUBJECT: ${{ secrets.MAIL_SUBJECT }}
-          MAIL_BODY: ${{ secrets.MAIL_BODY }}
-          PDF_FILENAME: ${{ secrets.PDF_FILENAME }}
-
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
+          SMTP_USE_STARTTLS: ${{ secrets.SMTP_USE_STARTTLS }}
+      
+          LAB_EMAIL: ${{ secrets.LAB_EMAIL }}
+      
           DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
           DROPBOX_FOLDER: ${{ secrets.DROPBOX_FOLDER }}
-          DROPBOX_BASE_FOLDER: ${{ secrets.DROPBOX_BASE_FOLDER }}
-          DROPBOX_CREATE_SHARED_LINK: ${{ secrets.DROPBOX_CREATE_SHARED_LINK }}
-
-          GITHUB_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
+      
         run: |
-          python -c "import sys; print('RUNNING:', sys.executable)"
+          set -euxo pipefail
+          pwd
+          ls -la
           python -m app.main
+          echo "=== out folder ==="
+          ls -la out || true
+          echo "=== data folder ==="
+          ls -la data || true
+          test -n "$(ls -1 out/*.pdf 2>/dev/null | head -n 1)"
+      
 
       - name: Upload generated PDF (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: generated-pdf
           path: out/*.pdf
+          if-no-files-found: error
+
 
       - name: Upload generated PDF as artifact
         uses: actions/upload-artifact@v4
