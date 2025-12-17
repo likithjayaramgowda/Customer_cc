@@ -108,7 +108,9 @@ def main():
         dropbox_file_path=dropbox_path,
         dropbox_shared_link=dropbox_link,
         github_run_url=os.environ.get("GITHUB_RUN_URL", ""),
+        sections=submission.sections,   # <-- REQUIRED
     )
+
 
 
 if __name__ == "__main__":
