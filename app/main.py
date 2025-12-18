@@ -85,14 +85,17 @@ def main():
         print(f"[INFO] Wrote PDF to out/{filename}")
 
         # Recipients (force lab + customer)
-        lab_email = os.environ.get("LAB_EMAIL", "").strip()
+        lab_emails_raw = os.environ.get("LAB_EMAIL", "")
+        lab_emails = [e.strip() for e in lab_emails_raw.split(",") if e.strip()]
+
         customer_email = _derive_customer_email(submission)
 
         recipients = []
-        if lab_email:
-            recipients.append(lab_email)
+        recipients.extend(lab_emails)
+        
         if customer_email and customer_email not in recipients:
             recipients.append(customer_email)
+
 
         if not recipients:
             if isinstance(submission.email_to, list):
