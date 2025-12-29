@@ -1,48 +1,54 @@
+# app/dropbox_uploader.py
+
 import os
 from typing import Tuple
 
 import dropbox
-from dropbox.files import WriteMode
+from dropbox.files import WriteMode, FolderMetadata
 from dropbox.exceptions import ApiError
 
 
-def _get_env(name: str) -> str:
-    v = os.environ.get(name, "")
-    return v.strip()
-
-
-def _get_dropbox_client() -> dropbox.Dropbox:
+def _ensure_folder(dbx: dropbox.Dropbox, folder: str) -> None:
     """
-    Supports:
-    1) Personal access token
-    2) Dropbox Business team-scoped token (requires selecting a team member)
+    Ensure DROPBOX_FOLDER exists. Creates it if missing.
+    For shared/team folders, this will work as long as the selected user has access.
     """
-    token = _get_env("DROPBOX_ACCESS_TOKEN")
-    if not token:
-        raise RuntimeError("DROPBOX_ACCESS_TOKEN not set")
-
-    # Try personal-style client first
-    dbx = dropbox.Dropbox(token)
-
     try:
-        dbx.users_get_current_account()
-        return dbx
-    except Exception:
-        # Likely a team-scoped token -> must select a team member
-        team_member_id = _get_env("DROPBOX_TEAM_MEMBER_ID")
-        if not team_member_id:
-            raise RuntimeError(
-                "Team-scoped Dropbox token detected. Set DROPBOX_TEAM_MEMBER_ID secret "
-                "(example: dbmid:xxxxxxxxxxxxxx) to choose the target team member."
-            )
-
-        team = dropbox.DropboxTeam(token)
-        return team.as_user(team_member_id)
+        md = dbx.files_get_metadata(folder)
+        if isinstance(md, FolderMetadata):
+            return
+        raise RuntimeError(f"DROPBOX_FOLDER exists but is not a folder: {folder}")
+    except ApiError:
+        # Create folder if it doesn't exist
+        try:
+            dbx.files_create_folder_v2(folder)
+            print(f"[Dropbox] Created folder: {folder}")
+        except Exception as ce:
+            raise RuntimeError(f"[Dropbox] Failed to create folder '{folder}': {ce}") from ce
 
 
 def upload_pdf_to_dropbox(pdf_bytes: bytes, filename: str) -> Tuple[str, str]:
-    folder = _get_env("DROPBOX_FOLDER")
+    """
+    Upload PDF to Dropbox.
 
+    Supports:
+    - Regular user tokens
+    - Team-scoped tokens by selecting a team member via:
+        DROPBOX_TEAM_MEMBER_ID = "dbmid:xxxx..."
+      (passed through Dropbox-API-Select-User header)
+
+    Required env:
+    - DROPBOX_ACCESS_TOKEN
+    - DROPBOX_FOLDER   (example: /CC_Test_Uploads or /Customer Complaints/New CC procedure/00_inspection...)
+    Optional env:
+    - DROPBOX_TEAM_MEMBER_ID (dbmid:...)
+    """
+    token = os.environ.get("DROPBOX_ACCESS_TOKEN", "").strip()
+    folder = os.environ.get("DROPBOX_FOLDER", "").strip()
+    team_member_id = os.environ.get("DROPBOX_TEAM_MEMBER_ID", "").strip()
+
+    if not token:
+        raise RuntimeError("DROPBOX_ACCESS_TOKEN not set")
     if not folder:
         raise RuntimeError("DROPBOX_FOLDER not set (example: /CC_Test_Uploads)")
 
@@ -52,7 +58,18 @@ def upload_pdf_to_dropbox(pdf_bytes: bytes, filename: str) -> Tuple[str, str]:
     target_path = f"{folder.rstrip('/')}/{filename}"
     print(f"[Dropbox] Target path: {target_path}")
 
-    dbx = _get_dropbox_client()
+    # If team-scoped token, select a member explicitly
+    if team_member_id:
+        print(f"[Dropbox] Using team member: {team_member_id}")
+        dbx = dropbox.Dropbox(
+            oauth2_access_token=token,
+            headers={"Dropbox-API-Select-User": team_member_id},
+        )
+    else:
+        dbx = dropbox.Dropbox(oauth2_access_token=token)
+
+    # Optional: ensure the folder exists (safe; if folder is a shared/team folder, user must have access)
+    _ensure_folder(dbx, folder)
 
     # Upload (overwrite avoids name conflicts during testing)
     dbx.files_upload(
@@ -72,7 +89,7 @@ def upload_pdf_to_dropbox(pdf_bytes: bytes, filename: str) -> Tuple[str, str]:
         else:
             shared_url = dbx.sharing_create_shared_link_with_settings(target_path).url
         print(f"[Dropbox] Shared link: {shared_url}")
-    except ApiError as e:
+    except Exception as e:
         print(f"[Dropbox] Uploaded, but shared link not created: {e}")
 
     return target_path, shared_url
