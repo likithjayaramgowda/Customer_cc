@@ -2,50 +2,59 @@ import os
 from typing import Tuple
 
 import dropbox
-from dropbox.files import WriteMode, FolderMetadata
+from dropbox.files import WriteMode
 from dropbox.exceptions import ApiError
 
 
-def _ensure_folder(dbx: dropbox.Dropbox, folder: str) -> None:
+def _get_env(name: str) -> str:
+    v = os.environ.get(name, "")
+    return v.strip()
+
+
+def _get_dropbox_client() -> dropbox.Dropbox:
+    """
+    Supports:
+    1) Personal access token
+    2) Dropbox Business team-scoped token (requires selecting a team member)
+    """
+    token = _get_env("DROPBOX_ACCESS_TOKEN")
+    if not token:
+        raise RuntimeError("DROPBOX_ACCESS_TOKEN not set")
+
+    # Try personal-style client first
+    dbx = dropbox.Dropbox(token)
+
     try:
-        md = dbx.files_get_metadata(folder)
-        if isinstance(md, FolderMetadata):
-            return
-        raise RuntimeError(f"DROPBOX_FOLDER exists but is not a folder: {folder}")
-    except ApiError as e:
-        # Create folder if it doesn't exist
-        try:
-            dbx.files_create_folder_v2(folder)
-            print(f"[Dropbox] Created folder: {folder}")
-        except Exception as ce:
-            raise RuntimeError(f"[Dropbox] Failed to create folder '{folder}': {ce}") from ce
+        dbx.users_get_current_account()
+        return dbx
+    except Exception:
+        # Likely a team-scoped token -> must select a team member
+        team_member_id = _get_env("DROPBOX_TEAM_MEMBER_ID")
+        if not team_member_id:
+            raise RuntimeError(
+                "Team-scoped Dropbox token detected. Set DROPBOX_TEAM_MEMBER_ID secret "
+                "(example: dbmid:xxxxxxxxxxxxxx) to choose the target team member."
+            )
+
+        team = dropbox.DropboxTeam(token)
+        return team.as_user(team_member_id)
 
 
 def upload_pdf_to_dropbox(pdf_bytes: bytes, filename: str) -> Tuple[str, str]:
-    token = os.environ.get("DROPBOX_ACCESS_TOKEN", "").strip()
-    folder = os.environ.get("DROPBOX_FOLDER", "").strip()
+    folder = _get_env("DROPBOX_FOLDER")
 
-    if not token:
-        raise RuntimeError("DROPBOX_ACCESS_TOKEN not set")
     if not folder:
         raise RuntimeError("DROPBOX_FOLDER not set (example: /CC_Test_Uploads)")
 
     if not folder.startswith("/"):
         folder = "/" + folder
-    folder = folder.rstrip("/")
 
-    dbx = dropbox.Dropbox(token)
+    target_path = f"{folder.rstrip('/')}/{filename}"
+    print(f"[Dropbox] Target path: {target_path}")
 
-    # Confirm token/account
-    acct = dbx.users_get_current_account()
-    print(f"[Dropbox] Auth OK as: {acct.email}")
+    dbx = _get_dropbox_client()
 
-    # Ensure folder exists
-    _ensure_folder(dbx, folder)
-
-    target_path = f"{folder}/{filename}"
-    print(f"[Dropbox] Uploading to: {target_path}")
-
+    # Upload (overwrite avoids name conflicts during testing)
     dbx.files_upload(
         pdf_bytes,
         target_path,
@@ -54,15 +63,7 @@ def upload_pdf_to_dropbox(pdf_bytes: bytes, filename: str) -> Tuple[str, str]:
     )
     print("[Dropbox] Upload OK")
 
-    # Verify it exists by listing folder
-    try:
-        entries = dbx.files_list_folder(folder).entries
-        names = [e.name for e in entries]
-        print(f"[Dropbox] Folder now contains: {names}")
-    except Exception as e:
-        print(f"[Dropbox] Could not list folder after upload: {e}")
-
-    # Shared link
+    # Create or reuse a shared link (optional)
     shared_url = ""
     try:
         links = dbx.sharing_list_shared_links(path=target_path, direct_only=True).links
@@ -70,12 +71,8 @@ def upload_pdf_to_dropbox(pdf_bytes: bytes, filename: str) -> Tuple[str, str]:
             shared_url = links[0].url
         else:
             shared_url = dbx.sharing_create_shared_link_with_settings(target_path).url
-
-        if shared_url and "dl=0" in shared_url:
-            shared_url = shared_url.replace("dl=0", "dl=1")
-
         print(f"[Dropbox] Shared link: {shared_url}")
-    except Exception as e:
+    except ApiError as e:
         print(f"[Dropbox] Uploaded, but shared link not created: {e}")
 
     return target_path, shared_url
