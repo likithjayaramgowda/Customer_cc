@@ -1,122 +1,130 @@
 import os
-from typing import Tuple
+from typing import Tuple, Optional
 
 import dropbox
+from dropbox.files import WriteMode
+from dropbox.exceptions import ApiError
 from dropbox.common import PathRoot
-from dropbox.exceptions import ApiError, AuthError
-from dropbox.files import WriteMode, FolderMetadata
 
 
-def _normalize_folder(folder: str) -> str:
-    folder = (folder or "").strip()
-    if not folder:
-        raise RuntimeError("DROPBOX_FOLDER not set (example: /CC_Test_Uploads)")
-    if not folder.startswith("/"):
-        folder = "/" + folder
-    return folder.rstrip("/")  # keep as folder path, no trailing slash
+def _get_env(name: str, required: bool = False) -> str:
+    val = os.environ.get(name, "").strip()
+    if required and not val:
+        raise RuntimeError(f"{name} not set")
+    return val
 
 
-def _get_dbx_with_correct_root(dbx: dropbox.Dropbox) -> dropbox.Dropbox:
-    """
-    If this user belongs to a Dropbox Business team, force all paths to be resolved
-    against the Team Space (team root namespace). This is what makes your uploads
-    land in the shared Team folder tree instead of personal space.
-
-    Uses with_path_root() for compatibility with older SDKs (fixes path_root init error).
-    """
-    acct = dbx.users_get_current_account()
-    root_info = getattr(acct, "root_info", None)
-
-    if root_info and hasattr(root_info, "root_namespace_id"):
-        ns_id = root_info.root_namespace_id
-        print(f"[Dropbox] Detected team root namespace: {ns_id} -> using Team Space")
-        return dbx.with_path_root(PathRoot.namespace_id(ns_id))
-
-    print("[Dropbox] No team root detected -> using personal space")
-    return dbx
-
-
-def _ensure_folder(dbx: dropbox.Dropbox, folder: str) -> None:
-    """
-    Ensure Dropbox folder exists.
-    """
-    try:
-        md = dbx.files_get_metadata(folder)
-        if not isinstance(md, FolderMetadata):
-            raise RuntimeError(f"DROPBOX_FOLDER exists but is not a folder: {folder}")
-    except ApiError:
-        # Folder missing -> create
-        dbx.files_create_folder_v2(folder)
-        print(f"[Dropbox] Created folder: {folder}")
-
-
-def _get_or_create_shared_link(dbx: dropbox.Dropbox, target_path: str) -> str:
-    """
-    Create or reuse a shared link for the uploaded file.
-    If the org restricts sharing or the scope isn't present, we just return "".
-    """
-    try:
-        res = dbx.sharing_list_shared_links(path=target_path, direct_only=True)
-        if res.links:
-            return res.links[0].url
-
-        return dbx.sharing_create_shared_link_with_settings(target_path).url
-    except Exception as e:
-        print(f"[Dropbox] Uploaded, but shared link not created: {e}")
+def _normalize_dbx_path(p: str) -> str:
+    p = (p or "").strip()
+    if not p:
         return ""
+    if not p.startswith("/"):
+        p = "/" + p
+    return p.rstrip("/")
+
+
+def _dbx_personal(token: str) -> dropbox.Dropbox:
+    return dropbox.Dropbox(token)
+
+
+def _dbx_team_space(token: str, team_root_namespace_id: str) -> dropbox.Dropbox:
+    """
+    Creates a Dropbox client rooted at the Team Space namespace.
+    NOTE: This does NOT grant permissions by itself. Your user must have access.
+    """
+    dbx = dropbox.Dropbox(token)
+    # Root all paths to the team space namespace (so "/Customer Complaints/..." targets team space)
+    return dbx.with_path_root(PathRoot.namespace_id(team_root_namespace_id))
 
 
 def upload_pdf_to_dropbox(pdf_bytes: bytes, filename: str) -> Tuple[str, str]:
     """
-    Uploads a PDF to Dropbox and (optionally) returns a shared link.
-
-    Required env:
-      - DROPBOX_ACCESS_TOKEN
-      - DROPBOX_FOLDER (Dropbox path, NOT Windows path)
-
-    Suggested DROPBOX_FOLDER for your team folder:
-      /Customer Complaints/New CC procedure/00_inspection & repair report (Avi)
-
-    Returns:
-      (target_path, shared_url)
+    Option 2 workflow:
+      1) Upload to PERSONAL staging folder
+      2) Copy to TEAM folder (Team Space)
+      3) Delete staging file if copy succeeds
+    Returns: (final_path_or_staging_path, shared_link_if_created)
     """
-    token = os.environ.get("DROPBOX_ACCESS_TOKEN", "").strip()
-    folder = os.environ.get("DROPBOX_FOLDER", "").strip()
 
-    if not token:
-        raise RuntimeError("DROPBOX_ACCESS_TOKEN not set")
+    token = _get_env("DROPBOX_ACCESS_TOKEN", required=True)
 
-    folder = _normalize_folder(folder)
-    target_path = f"{folder}/{filename}"
-    print(f"[Dropbox] Target path: {target_path}")
+    # Personal staging upload location (in your personal Dropbox)
+    personal_folder = _normalize_dbx_path(_get_env("DROPBOX_PERSONAL_FOLDER", required=True))
+    personal_path = f"{personal_folder}/{filename}"
 
-    # Base client
-    dbx = dropbox.Dropbox(token)
+    # Team destination location (Team Space path)
+    team_folder = _normalize_dbx_path(_get_env("DROPBOX_TEAM_FOLDER", required=True))
+    team_root_ns = _get_env("DROPBOX_TEAM_ROOT_NAMESPACE_ID", required=False)
+    team_path = f"{team_folder}/{filename}"
 
-    # Validate token quickly
-    try:
-        dbx.users_get_current_account()
-    except AuthError as e:
-        raise RuntimeError(f"Dropbox auth failed (bad/expired token): {e}") from e
+    print(f"[Dropbox] Personal staging path: {personal_path}")
+    print(f"[Dropbox] Team destination path:  {team_path}")
 
-    # Force correct root (Team Space if available)
-    dbx = _get_dbx_with_correct_root(dbx)
+    dbx_personal = _dbx_personal(token)
 
-    # Ensure folder exists (in the correct root)
-    _ensure_folder(dbx, folder)
-
-    # Upload (overwrite helps testing + avoids collisions)
-    dbx.files_upload(
+    # 1) Upload into personal staging
+    dbx_personal.files_upload(
         pdf_bytes,
-        target_path,
+        personal_path,
         mode=WriteMode.overwrite,
         mute=True,
     )
-    print("[Dropbox] Upload OK")
+    print("[Dropbox] Uploaded to PERSONAL staging OK")
 
-    # Shared link (optional)
-    shared_url = _get_or_create_shared_link(dbx, target_path)
-    if shared_url:
-        print(f"[Dropbox] Shared link: {shared_url}")
+    # Create a share link for staging (so you always get something usable)
+    staging_shared_url = ""
+    try:
+        links = dbx_personal.sharing_list_shared_links(path=personal_path, direct_only=True).links
+        if links:
+            staging_shared_url = links[0].url
+        else:
+            staging_shared_url = dbx_personal.sharing_create_shared_link_with_settings(personal_path).url
+        print(f"[Dropbox] Staging shared link: {staging_shared_url}")
+    except Exception as e:
+        print(f"[Dropbox] Staging uploaded, but shared link not created: {e}")
 
-    return target_path, shared_url
+    # If no team namespace provided, we cannot target Team Space reliably
+    if not team_root_ns:
+        print("[Dropbox] No DROPBOX_TEAM_ROOT_NAMESPACE_ID set. Skipping team copy.")
+        return personal_path, staging_shared_url
+
+    dbx_team = _dbx_team_space(token, team_root_ns)
+
+    # 2) Try copy to team folder
+    try:
+        # Ensure destination folder exists (create_folder will fail if you don't have permissions)
+        try:
+            dbx_team.files_get_metadata(team_folder)
+        except ApiError:
+            dbx_team.files_create_folder_v2(team_folder)
+
+        # Copy from personal -> team
+        # Note: copy across namespaces generally works if you have access to the destination.
+        dbx_team.files_copy_v2(from_path=personal_path, to_path=team_path, autorename=False)
+        print("[Dropbox] Copied into TEAM folder OK")
+
+        # 3) Delete staging file after successful copy
+        try:
+            dbx_personal.files_delete_v2(personal_path)
+            print("[Dropbox] Deleted PERSONAL staging file OK")
+        except Exception as e:
+            print(f"[Dropbox] Team copy OK, but failed deleting staging file: {e}")
+
+        # Create/reuse share link from TEAM location (optional)
+        team_shared_url = ""
+        try:
+            links = dbx_team.sharing_list_shared_links(path=team_path, direct_only=True).links
+            if links:
+                team_shared_url = links[0].url
+            else:
+                team_shared_url = dbx_team.sharing_create_shared_link_with_settings(team_path).url
+            print(f"[Dropbox] Team shared link: {team_shared_url}")
+        except Exception as e:
+            print(f"[Dropbox] Team copy OK, but shared link not created: {e}")
+
+        return team_path, (team_shared_url or staging_shared_url)
+
+    except Exception as e:
+        print(f"[Dropbox] Team copy FAILED, keeping staging file. Reason: {e}")
+        # Fallback: keep personal staging path/link
+        return personal_path, staging_shared_url
