@@ -53,7 +53,9 @@ jobs:
           LAB_EMAIL: ${{ secrets.LAB_EMAIL }}
       
           DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
-          DROPBOX_FOLDER: ${{ secrets.DROPBOX_FOLDER }}
+          DROPBOX_TEAM_FOLDER: ${{ secrets.DROPBOX_TEAM_FOLDER }}
+          DROPBOX_PERSONAL_FOLDER: ${{ secrets.DROPBOX_PERSONAL_FOLDER }
+          DROPBOX_TEAM_ROOT_NAMESPACE_ID: ${{ secrets.DROPBOX_TEAM_ROOT_NAMESPACE_ID }}
       
         run: |
           set -euxo pipefail
